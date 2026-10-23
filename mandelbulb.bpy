@@ -1,10 +1,10 @@
 import bpy
 import math
 
-# 1. Clean up existing mesh objects in the scene
-bpy.ops.object.select_all(action='DESELECT')
+# 1. Clean up existing scene objects
+bpy.ops.object.select_all(action='SELECT')
 for obj in bpy.data.objects:
-  if obj.type == 'MESH':
+  if obj.type in ['MESH', 'LIGHT', 'CAMERA']:
     obj.select_set(True)
 bpy.ops.object.delete()
 
@@ -33,13 +33,20 @@ def is_in_mandelbulb(cx, cy, cz, max_iter=5, power=8):
   return True
 
 
-# 3. Generate Mandelbulb Point Cloud across a 3D Grid
-print("Generating Mandelbulb points... This will take a second.")
-resolution = 36  # Grid resolution (36x36x36 = ~46,000 points tested)
-bound = 1.25
+# 3. Generate Mandelbulb Grid and Connect Edges
+print("Generating Mandelbulb lattice structure...")
+resolution = 26  # Optimized grid density for smooth generation
+bound = 1.8
+scale_factor = 3.5
+
+grid = {}
 verts = []
+edges = []
 
 step = (2.0 * bound) / resolution
+index_counter = 0
+
+# Step A: Find all valid points inside the Mandelbulb
 for xi in range(resolution):
   cx = -bound + xi * step
   for yi in range(resolution):
@@ -47,50 +54,86 @@ for xi in range(resolution):
     for zi in range(resolution):
       cz = -bound + zi * step
       if is_in_mandelbulb(cx, cy, cz):
-        verts.append((cx, cy, cz))
+        v = (cx * scale_factor, cy * scale_factor, cz * scale_factor)
+        grid[(xi, yi, zi)] = index_counter
+        verts.append(v)
+        index_counter += 1
 
-# Create mesh data from the calculated points
+# Step B: Connect adjacent points with edges to form a physical lattice wireframe
+for (xi, yi, zi), idx in grid.items():
+  if (xi + 1, yi, zi) in grid:
+    edges.append((idx, grid[(xi + 1, yi, zi)]))
+  if (xi, yi + 1, zi) in grid:
+    edges.append((idx, grid[(xi, yi + 1, zi)]))
+  if (xi, yi, zi + 1) in grid:
+    edges.append((idx, grid[(xi, yi, zi + 1)]))
+
+# Create the mesh object
 mesh_data = bpy.data.meshes.new("MandelbulbMesh")
-mesh_data.from_pydata(verts, [], [])
+mesh_data.from_pydata(verts, edges, [])
 mesh_data.update()
 
-obj = bpy.data.objects.new("Mandelbulb", mesh_data)
+obj = bpy.data.objects.new("MandelbulbLattice", mesh_data)
 bpy.context.collection.objects.link(obj)
 bpy.context.view_layer.objects.active = obj
 obj.select_set(True)
 
-# Make the model nice and large
-obj.scale = (4.0, 4.0, 4.0)
+# 4. Add Skin and Subdivision Surface Modifiers for solid thickness
+skin_mod = obj.modifiers.new(name="Skin", type="SKIN")
+subsurf_mod = obj.modifiers.new(name="Subsurf", type="SUBSURF")
+subsurf_mod.levels = 2
+subsurf_mod.render_levels = 2
 
-# 4. Add Modifiers to fuse the point cloud into a solid, printable 3D sculpture
-# Voxel Remesh turns the point cloud into a solid manifold mesh
-remesh_mod = obj.modifiers.new(name="VoxelRemesh", type="REMESH")
-remesh_mod.mode = 'VOXEL'
-remesh_mod.voxel_size = 0.045
-remesh_mod.adaptivity = 0.0
+# Give every node a nice consistent physical thickness
+if mesh_data.skin_vertices:
+  for v in mesh_data.skin_vertices[0].data:
+    v.radius = (0.045, 0.045)
 
-# Smooth modifier cleans up the voxel edges into organic curves
-smooth_mod = obj.modifiers.new(name="Smooth", type="SMOOTH")
-smooth_mod.factor = 0.6
-smooth_mod.iterations = 4
+# 5. Add a vibrant Material
+mat = bpy.data.materials.new(name="MandelbulbMaterial")
+mat.use_nodes = True
+principled = mat.node_tree.nodes.get("Principled BSDF")
+if principled:
+  principled.inputs["Base Color"].default_value = (
+      0.9,
+      0.2,
+      0.05,
+      1.0,
+  )  # Fiery orange-red
+  principled.inputs["Roughness"].default_value = 0.3
+obj.data.materials.append(mat)
 
-# 5. Setup Animation Frame Range & Keyframes
+# 6. Add a Sun Light so it catches light brilliantly
+light_data = bpy.data.lights.new(name="SunLight", type="SUN")
+light_data.energy = 6.0
+light_object = bpy.data.objects.new("SunLightObj", light_data)
+light_object.location = (6.0, -6.0, 9.0)
+light_object.rotation_euler = (math.radians(45), 0, math.radians(45))
+bpy.context.collection.objects.link(light_object)
+
+# 7. Add a Camera
+cam_data = bpy.data.cameras.new("Camera")
+cam_object = bpy.data.objects.new("CameraObj", cam_data)
+cam_object.location = (0, -12, 2.5)
+cam_object.rotation_euler = (math.radians(78), 0, 0)
+bpy.context.collection.objects.link(cam_object)
+bpy.context.scene.camera = cam_object
+
+# 8. Setup Animation Keyframes
 start_frame = 1
 end_frame = 120
 bpy.context.scene.frame_start = start_frame
 bpy.context.scene.frame_end = end_frame
 
-# Initial rotation at frame 1
 bpy.context.scene.frame_set(start_frame)
 obj.rotation_euler = (0, 0, 0)
 obj.keyframe_insert(data_path="rotation_euler", frame=start_frame)
 
-# Final rotation at frame 120 (360-degree smooth spin)
 bpy.context.scene.frame_set(end_frame)
 obj.rotation_euler = (math.radians(15), math.radians(360), math.radians(10))
 obj.keyframe_insert(data_path="rotation_euler", frame=end_frame)
 
-# Make rotation loop smoothly with linear interpolation
+# Smooth linear interpolation for the loop
 if (
     obj.animation_data
     and obj.animation_data.action
@@ -100,7 +143,5 @@ if (
     for keyframe in fcurve.keyframe_points:
       keyframe.interpolation = 'LINEAR'
 
-# Reset timeline back to frame 1
 bpy.context.scene.frame_set(start_frame)
-
-print("Mandelbulb fractal successfully generated, fused, and animated!")
+print("Mandelbulb lattice with skin thickness generated successfully!")
