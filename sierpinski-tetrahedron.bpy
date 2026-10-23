@@ -64,7 +64,7 @@ v2 = (scale, -scale, -scale * 0.5)
 v3 = (0.0, scale, -scale * 0.5)
 
 # Generate fractal at Depth 3 (64 individual tetrahedra, highly detailed)
-generate_sierpinski(bm, v0, v1, v2, v3, depth=3)
+generate_sierpinski(bm, v0, v1, v2, v3, depth=5)
 
 # Finalize mesh data
 bm.to_mesh(mesh_data)
