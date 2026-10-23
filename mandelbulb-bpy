@@ -1,0 +1,106 @@
+import bpy
+import math
+
+# 1. Clean up existing mesh objects in the scene
+bpy.ops.object.select_all(action='DESELECT')
+for obj in bpy.data.objects:
+  if obj.type == 'MESH':
+    obj.select_set(True)
+bpy.ops.object.delete()
+
+
+# 2. Mandelbulb equation test function (Power 8)
+def is_in_mandelbulb(cx, cy, cz, max_iter=5, power=8):
+  x, y, z = 0.0, 0.0, 0.0
+  for _ in range(max_iter):
+    r = math.sqrt(x * x + y * y + z * z)
+    if r > 2.0:
+      return False
+    if r == 0:
+      theta, phi = 0, 0
+    else:
+      theta = math.acos(max(-1.0, min(1.0, z / r)))
+      phi = math.atan2(y, x)
+
+    zr = r**power
+    theta = theta * power
+    phi = phi * power
+
+    sin_theta = math.sin(theta)
+    x = zr * sin_theta * math.cos(phi) + cx
+    y = zr * sin_theta * math.sin(phi) + cy
+    z = zr * math.cos(theta) + cz
+  return True
+
+
+# 3. Generate Mandelbulb Point Cloud across a 3D Grid
+print("Generating Mandelbulb points... This will take a second.")
+resolution = 36  # Grid resolution (36x36x36 = ~46,000 points tested)
+bound = 1.25
+verts = []
+
+step = (2.0 * bound) / resolution
+for xi in range(resolution):
+  cx = -bound + xi * step
+  for yi in range(resolution):
+    cy = -bound + yi * step
+    for zi in range(resolution):
+      cz = -bound + zi * step
+      if is_in_mandelbulb(cx, cy, cz):
+        verts.append((cx, cy, cz))
+
+# Create mesh data from the calculated points
+mesh_data = bpy.data.meshes.new("MandelbulbMesh")
+mesh_data.from_pydata(verts, [], [])
+mesh_data.update()
+
+obj = bpy.data.objects.new("Mandelbulb", mesh_data)
+bpy.context.collection.objects.link(obj)
+bpy.context.view_layer.objects.active = obj
+obj.select_set(True)
+
+# Make the model nice and large
+obj.scale = (4.0, 4.0, 4.0)
+
+# 4. Add Modifiers to fuse the point cloud into a solid, printable 3D sculpture
+# Voxel Remesh turns the point cloud into a solid manifold mesh
+remesh_mod = obj.modifiers.new(name="VoxelRemesh", type="REMESH")
+remesh_mod.mode = 'VOXEL'
+remesh_mod.voxel_size = 0.045
+remesh_mod.adaptivity = 0.0
+
+# Smooth modifier cleans up the voxel edges into organic curves
+smooth_mod = obj.modifiers.new(name="Smooth", type="SMOOTH")
+smooth_mod.factor = 0.6
+smooth_mod.iterations = 4
+
+# 5. Setup Animation Frame Range & Keyframes
+start_frame = 1
+end_frame = 120
+bpy.context.scene.frame_start = start_frame
+bpy.context.scene.frame_end = end_frame
+
+# Initial rotation at frame 1
+bpy.context.scene.frame_set(start_frame)
+obj.rotation_euler = (0, 0, 0)
+obj.keyframe_insert(data_path="rotation_euler", frame=start_frame)
+
+# Final rotation at frame 120 (360-degree smooth spin)
+bpy.context.scene.frame_set(end_frame)
+obj.rotation_euler = (math.radians(15), math.radians(360), math.radians(10))
+obj.keyframe_insert(data_path="rotation_euler", frame=end_frame)
+
+# Make rotation loop smoothly with linear interpolation
+if (
+    obj.animation_data
+    and obj.animation_data.action
+    and obj.animation_data.action.fcurves
+):
+  for fcurve in obj.animation_data.action.fcurves:
+    for keyframe in fcurve.keyframe_points:
+      keyframe.interpolation = 'LINEAR'
+
+# Reset timeline back to frame 1
+bpy.context.scene.frame_set(start_frame)
+
+print("Mandelbulb fractal successfully generated, fused, and animated!")
