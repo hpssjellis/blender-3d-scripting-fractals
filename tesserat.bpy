@@ -1,0 +1,165 @@
+import bpy
+import itertools
+import math
+
+# ==============================================================================
+# 1. CLEANUP SCENE
+# ==============================================================================
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete()
+
+# Set Frame Range
+start_frame = 1
+end_frame = 120
+bpy.context.scene.frame_start = start_frame
+bpy.context.scene.frame_end = end_frame
+
+
+# ==============================================================================
+# 2. LEFT SIDE: 4D TESSERACT PROJECTED TO 3D
+# ==============================================================================
+verts_4d = list(itertools.product([-1, 1], repeat=4))
+
+tesseract_edges = []
+for i in range(16):
+  for j in range(i + 1, 16):
+    if sum(1 for a, b in zip(verts_4d[i], verts_4d[j]) if a != b) == 1:
+      tesseract_edges.append((i, j))
+
+
+def rotate_and_project_4d(v, angle_xy, angle_zw):
+  x, y, z, w = v
+  # XY plane rotation
+  cos_xy, sin_xy = math.cos(angle_xy), math.sin(angle_xy)
+  x1 = x * cos_xy - y * sin_xy
+  y1 = x * sin_xy + y * cos_xy
+  z1, w1 = z, w
+
+  # ZW plane rotation (4D rotation)
+  cos_zw, sin_zw = math.cos(angle_zw), math.sin(angle_zw)
+  x2, y2 = x1, y1
+  z2 = z1 * cos_zw - w1 * sin_zw
+  w2 = z1 * sin_zw + w1 * cos_zw
+
+  # 4D to 3D perspective projection
+  distance = 3.0
+  w_factor = 1.0 / (distance - w2)
+  return (x2 * w_factor, y2 * w_factor, z2 * w_factor)
+
+
+# Create Tesseract Mesh on the left side (offset X = -4.0)
+tess_offset_x = -4.0
+initial_verts = [
+    (co[0] + tess_offset_x, co[1], co[2])
+    for co in [rotate_and_project_4d(v, 0, 0) for v in verts_4d]
+]
+
+tess_mesh = bpy.data.meshes.new("TesseractMesh")
+tess_mesh.from_pydata(initial_verts, tesseract_edges, [])
+tess_mesh.update()
+
+tess_obj = bpy.data.objects.new("Tesseract_4D_to_3D", tess_mesh)
+bpy.context.collection.objects.link(tess_obj)
+
+# Apply Skin & Subsurf Modifiers to give physical 3D thickness
+skin_mod = tess_obj.modifiers.new(name="Skin", type="SKIN")
+subsurf_mod = tess_obj.modifiers.new(name="Subsurf", type="SUBSURF")
+subsurf_mod.levels = 2
+subsurf_mod.render_levels = 2
+
+if tess_mesh.skin_vertices:
+  for v in tess_mesh.skin_vertices[0].data:
+    v.radius = (0.035, 0.035)
+
+# Animate 4D Tesseract Rotation Keyframes
+for frame in range(start_frame, end_frame + 1):
+  progress = (frame - start_frame) / (end_frame - start_frame)
+  angle_xy = progress * 2 * math.pi
+  angle_zw = progress * 2 * math.pi * 1.5
+
+  cur_verts_3d = [
+      rotate_and_project_4d(v, angle_xy, angle_zw) for v in verts_4d
+  ]
+  for i, co in enumerate(cur_verts_3d):
+    tess_mesh.vertices[i].co = (co[0] + tess_offset_x, co[1], co[2])
+    tess_mesh.vertices[i].keyframe_insert("co", frame=frame)
+
+
+# ==============================================================================
+# 3. RIGHT SIDE: 3D OBJECT CASTING A 2D SHADOW ON A WALL
+# ==============================================================================
+cube_offset_x = 3.0
+
+# Add Shadow Projection Screen/Wall
+bpy.ops.mesh.primitive_plane_add(
+    size=8,
+    location=(cube_offset_x, 3.0, 0.0),
+    rotation=(math.radians(90), 0, 0),
+)
+shadow_wall = bpy.context.active_object
+shadow_wall.name = "Shadow_Wall_2D_Screen"
+
+# Add Floor Plane underneath both
+bpy.ops.mesh.primitive_plane_add(
+    size=20, location=(0, 0, -2.5), rotation=(0, 0, 0)
+)
+floor = bpy.context.active_object
+floor.name = "Stage_Floor"
+
+# Add Rotating 3D Cube
+bpy.ops.mesh.primitive_cube_add(
+    size=1.5, location=(cube_offset_x, -0.5, 0.0)
+)
+cube_3d = bpy.context.active_object
+cube_3d.name = "Cube_3D"
+
+# Animate 3D Cube Rotation in X and Y axes
+bpy.context.scene.frame_set(start_frame)
+cube_3d.rotation_euler = (0, 0, 0)
+cube_3d.keyframe_insert(data_path="rotation_euler", frame=start_frame)
+
+bpy.context.scene.frame_set(end_frame)
+cube_3d.rotation_euler = (math.radians(360), math.radians(360), 0)
+cube_3d.keyframe_insert(data_path="rotation_euler", frame=end_frame)
+
+# Spotlight pointing at the Cube toward the Wall to cast the sharp 2D shadow
+spot_light_data = bpy.data.lights.new(name="Spotlight_Data", type="SPOT")
+spot_light_data.energy = 1500.0  # High brightness for clear shadow contrast
+spot_light_data.spot_size = math.radians(60)
+spot_light_data.shadow_soft_size = 0.01  # Crisp shadow edges
+
+spot_light = bpy.data.objects.new("Shadow_Light", spot_light_data)
+spot_light.location = (cube_offset_x, -5.0, 1.0)
+spot_light.rotation_euler = (math.radians(75), 0, 0)
+bpy.context.collection.objects.link(spot_light)
+
+
+# ==============================================================================
+# 4. LIGHTING & CAMERA SETUP
+# ==============================================================================
+# General Ambient Fill Light
+fill_light_data = bpy.data.lights.new(name="Fill_Light_Data", type="SUN")
+fill_light_data.energy = 1.5
+fill_light = bpy.data.objects.new("Fill_Light", fill_light_data)
+fill_light.rotation_euler = (math.radians(45), math.radians(30), 0)
+bpy.context.collection.objects.link(fill_light)
+
+# Add Camera angled to view both side-by-side
+bpy.ops.object.camera_add(
+    location=(0, -11.0, 3.0), rotation=(math.radians(78), 0, 0)
+)
+camera = bpy.context.active_object
+bpy.context.scene.camera = camera
+
+
+# ==============================================================================
+# 5. LINEAR INTERPOLATION & RESET
+# ==============================================================================
+for obj in [tess_obj, cube_3d]:
+  if obj.animation_data and obj.animation_data.action:
+    for fcurve in obj.animation_data.action.fcurves:
+      for kf in fcurve.keyframe_points:
+        kf.interpolation = "LINEAR"
+
+bpy.context.scene.frame_set(start_frame)
+print("Dual 4D->3D and 3D->2D shadow scene generated successfully!")
