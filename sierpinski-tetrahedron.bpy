@@ -1,0 +1,103 @@
+import bmesh
+import bpy
+import math
+
+# 1. Clean up existing mesh objects in the scene
+bpy.ops.object.select_all(action='DESELECT')
+for obj in bpy.data.objects:
+  if obj.type == 'MESH':
+    obj.select_set(True)
+bpy.ops.object.delete()
+
+# 2. Create a new mesh and object for the Sierpinski Tetrahedron
+mesh_data = bpy.data.meshes.new("SierpinskiMesh")
+obj = bpy.data.objects.new("SierpinskiTetrahedron", mesh_data)
+bpy.context.collection.objects.link(obj)
+bpy.context.view_layer.objects.active = obj
+obj.select_set(True)
+
+# Use BMesh to procedurally build the fractal geometry
+bm = bmesh.new()
+
+
+def add_tetrahedron(bm, v0, v1, v2, v3):
+  """Adds a single solid tetrahedron to the BMesh collection."""
+  verts = [
+      bm.verts.new(v0),
+      bm.verts.new(v1),
+      bm.verts.new(v2),
+      bm.verts.new(v3),
+  ]
+  faces = [(0, 1, 2), (0, 2, 3), (0, 3, 1), (1, 3, 2)]
+  for f in faces:
+    try:
+      bm.faces.new([verts[f[0]], verts[f[1]], verts[f[2]]])
+    except ValueError:
+      pass  # Skip if face already exists
+
+
+def generate_sierpinski(bm, v0, v1, v2, v3, depth):
+  """Recursively subdivides a tetrahedron into a Sierpinski fractal."""
+  if depth == 0:
+    add_tetrahedron(bm, v0, v1, v2, v3)
+  else:
+    # Calculate edge midpoints
+    m01 = tuple((a + b) / 2 for a, b in zip(v0, v1))
+    m02 = tuple((a + b) / 2 for a, b in zip(v0, v2))
+    m03 = tuple((a + b) / 2 for a, b in zip(v0, v3))
+    m12 = tuple((a + b) / 2 for a, b in zip(v1, v2))
+    m13 = tuple((a + b) / 2 for a, b in zip(v1, v3))
+    m23 = tuple((a + b) / 2 for a, b in zip(v2, v3))
+
+    # Recurse into the 4 corner sub-tetrahedra (leaving the center hollow)
+    generate_sierpinski(bm, v0, m01, m02, m03, depth - 1)
+    generate_sierpinski(bm, m01, v1, m12, m13, depth - 1)
+    generate_sierpinski(bm, m02, m12, v2, m23, depth - 1)
+    generate_sierpinski(bm, m03, m13, m23, v3, depth - 1)
+
+
+# 3. Define base coordinates (Scaled up larger: scale = 6.0)
+scale = 6.0
+v0 = (0.0, 0.0, scale * 1.2)
+v1 = (-scale, -scale, -scale * 0.5)
+v2 = (scale, -scale, -scale * 0.5)
+v3 = (0.0, scale, -scale * 0.5)
+
+# Generate fractal at Depth 3 (64 individual tetrahedra, highly detailed)
+generate_sierpinski(bm, v0, v1, v2, v3, depth=3)
+
+# Finalize mesh data
+bm.to_mesh(mesh_data)
+bm.free()
+mesh_data.update()
+
+# 4. Setup Animation Frame Range
+start_frame = 1
+end_frame = 120
+bpy.context.scene.frame_start = start_frame
+bpy.context.scene.frame_end = end_frame
+
+# 5. Set initial rotation keyframe at frame 1
+bpy.context.scene.frame_set(start_frame)
+obj.rotation_euler = (0, 0, 0)
+obj.keyframe_insert(data_path="rotation_euler", frame=start_frame)
+
+# 6. Set final rotation keyframe at frame 120 (spinning on Z and X axes)
+bpy.context.scene.frame_set(end_frame)
+obj.rotation_euler = (math.radians(360), math.radians(180), math.radians(360))
+obj.keyframe_insert(data_path="rotation_euler", frame=end_frame)
+
+# 7. Make rotation loop smoothly with safe null-checks for F-curves
+if (
+    obj.animation_data
+    and obj.animation_data.action
+    and obj.animation_data.action.fcurves
+):
+  for fcurve in obj.animation_data.action.fcurves:
+    for keyframe in fcurve.keyframe_points:
+      keyframe.interpolation = 'LINEAR'
+
+# Reset timeline back to frame 1
+bpy.context.scene.frame_set(start_frame)
+
+print("Sierpinski Tetrahedron animation created successfully!")
